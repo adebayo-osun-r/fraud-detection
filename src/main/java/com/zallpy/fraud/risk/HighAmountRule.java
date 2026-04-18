@@ -4,10 +4,20 @@ import com.zallpy.fraud.domain.Transaction;
 import org.springframework.stereotype.Component;
 
 @Component
-public class HighAmountRule implements RiskRule {
+public class HighAmountRule implements FraudRule<Transaction> {
 
     @Override
-    public int apply(Transaction transaction) {
-        return transaction.getAmount() > 10000 ? 10 : 0;
+    public RuleResult apply(Transaction tx) {
+
+        if (tx.getAmount() > 10000) {
+            return new RuleResult(
+                    "HIGH_AMOUNT_RULE",
+                    10,
+                    "Transaction exceeds 10,000",
+                    "AMOUNT"
+            );
+        }
+
+        return new RuleResult("HIGH_AMOUNT_RULE", 0, "OK", "AMOUNT");
     }
 }

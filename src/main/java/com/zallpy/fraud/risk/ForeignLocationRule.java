@@ -4,13 +4,20 @@ import com.zallpy.fraud.domain.Transaction;
 import org.springframework.stereotype.Component;
 
 @Component
-public class ForeignLocationRule implements RiskRule {
+public class ForeignLocationRule implements FraudRule<Transaction> {
 
     @Override
-    public int apply(Transaction transaction) {
-        if (transaction.getUser() == null) return 0;
+    public RuleResult apply(Transaction tx) {
 
-        return !transaction.getLocation()
-                .equalsIgnoreCase(transaction.getUser().getCountry()) ? 5 : 0;
+        if (tx.getUser() == null) {
+            return new RuleResult("FOREIGN_RULE", 0, "No user", "LOCATION");
+        }
+
+        boolean foreign = !tx.getLocation()
+                .equalsIgnoreCase(tx.getUser().getCountry());
+
+        return foreign
+                ? new RuleResult("FOREIGN_RULE", 5, "Foreign transaction detected", "LOCATION")
+                : new RuleResult("FOREIGN_RULE", 0, "OK", "LOCATION");
     }
 }

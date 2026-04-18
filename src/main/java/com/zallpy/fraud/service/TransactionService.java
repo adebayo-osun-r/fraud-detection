@@ -1,75 +1,84 @@
 package com.zallpy.fraud.service;
 
 import com.zallpy.fraud.domain.*;
+import com.zallpy.fraud.ml.*;
+import com.zallpy.fraud.risk.*;
 import com.zallpy.fraud.repository.*;
-import com.zallpy.fraud.risk.RiskEngine;
 import com.zallpy.fraud.util.RiskUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class TransactionService {
 
-    private static final Logger log = LoggerFactory.getLogger(TransactionService.class);
+        private final TransactionRepository transactionRepository;
+        private final UserRepository userRepository;
+        private final FraudAlertRepository fraudAlertRepository;
 
-    private final TransactionRepository transactionRepository;
-    private final UserRepository userRepository;
-    private final FraudAlertRepository fraudAlertRepository;
-    private final RiskEngine riskEngine;
-    private final BlockService blockService;
+        private final RiskEngine riskEngine;
+        private final FraudMLService mlService;
+        private final FeatureService featureService;
+        private final RiskAggregator riskAggregator;
+        private final BlockService blockService;
 
-    public TransactionService(TransactionRepository transactionRepository,
-            UserRepository userRepository,
-            FraudAlertRepository fraudAlertRepository,
-            RiskEngine riskEngine,
-            BlockService blockService) {
-        this.transactionRepository = transactionRepository;
-        this.userRepository = userRepository;
-        this.fraudAlertRepository = fraudAlertRepository;
-        this.riskEngine = riskEngine;
-        this.blockService = blockService;
-    }
+        public TransactionService(
+                        TransactionRepository transactionRepository,
+                        UserRepository userRepository,
+                        FraudAlertRepository fraudAlertRepository,
+                        RiskEngine riskEngine,
+                        FraudMLService mlService,
+                        FeatureService featureService,
+                        RiskAggregator riskAggregator,
+                        BlockService blockService) {
 
-    public Transaction processTransaction(Long userId, Transaction transaction) {
-
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        if (user.isBlocked()) {
-            throw new RuntimeException("User account is blocked");
-        }
-        transaction.setUser(user);
-
-        // Calculate risk
-        double riskScore = riskEngine.calculateRisk(transaction);
-
-        transaction.setRiskScore(riskScore);
-        transaction.setFlagged(riskScore >= 15);
-
-        Transaction savedTx = transactionRepository.save(transaction);
-
-        // Generate Fraud Alert
-        if (savedTx.isFlagged()) {
-
-            FraudAlert alert = FraudAlert.builder()
-                    .alertType("TRANSACTION")
-                    .message("High-risk transaction detected")
-                    .riskScore(riskScore)
-                    .riskLevel(RiskUtil.getRiskLevel(riskScore))
-                    .referenceId(savedTx.getId())
-                    .user(user)
-                    .build();
-
-            fraudAlertRepository.save(alert);
-            blockService.evaluateAndBlockUser(user);
-
-            log.warn(" FRAUD ALERT: User {} | Tx {} | Score {}",
-                    user.getId(), savedTx.getId(), riskScore);
-        } else {
-            log.info(" Transaction OK: User {} | Score {}", user.getId(), riskScore);
+                this.transactionRepository = transactionRepository;
+                this.userRepository = userRepository;
+                this.fraudAlertRepository = fraudAlertRepository;
+                this.riskEngine = riskEngine;
+                this.mlService = mlService;
+                this.featureService = featureService;
+                this.riskAggregator = riskAggregator;
+                this.blockService = blockService;
         }
 
-        return savedTx;
-    }
+        public Transaction processTransaction(Long userId, Transaction tx) {
+
+                User user = userRepository.findById(userId)
+                                .orElseThrow();
+
+                if (user.isBlocked())
+                        throw new RuntimeException("Blocked");
+
+                tx.setUser(user);
+
+                var ruleResult = riskEngine.calculate(tx);
+
+                FeatureVector features = FeatureExtractor.extract(tx, user, featureService);
+
+                double mlScore = mlService.score(features.toArray());
+
+                double finalScore = riskAggregator.combine(
+                                ruleResult.totalScore(),
+                                mlScore);
+
+                tx.setRiskScore(finalScore);
+                tx.setFlagged(finalScore >= 15);
+
+                Transaction saved = transactionRepository.save(tx);
+
+                if (saved.isFlagged()) {
+
+                        fraudAlertRepository.save(
+                                        FraudAlert.builder()
+                                                        .user(user)
+                                                        .riskScore(finalScore)
+                                                        .riskLevel(RiskUtil.getRiskLevel(finalScore))
+                                                        .message("Fraud detected")
+                                                        .referenceId(saved.getId())
+                                                        .build());
+
+                        blockService.evaluateAndBlockUser(user);
+                }
+
+                return saved;
+        }
 }

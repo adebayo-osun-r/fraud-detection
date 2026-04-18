@@ -5,40 +5,38 @@ import com.zallpy.fraud.repository.TransactionRepository;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 @Component
-public class VelocityRule implements RiskRule {
+public class VelocityRule implements FraudRule<Transaction> {
 
-    private final TransactionRepository transactionRepository;
+    private final TransactionRepository repo;
 
-    public VelocityRule(TransactionRepository transactionRepository) {
-        this.transactionRepository = transactionRepository;
+    public VelocityRule(TransactionRepository repo) {
+        this.repo = repo;
     }
 
     @Override
-    public int apply(Transaction transaction) {
+    public RuleResult apply(Transaction tx) {
 
-        if (transaction.getUser() == null) return 0;
-
-        //  Check last 1 minute
-        LocalDateTime oneMinuteAgo = LocalDateTime.now().minusMinutes(1);
-
-        List<Transaction> recentTransactions =
-                transactionRepository.findByUserIdAndCreatedAtAfter(
-                        transaction.getUser().getId(),
-                        oneMinuteAgo
-                );
-
-        int count = recentTransactions.size();
-
-        //  Rule Logic
-        if (count >= 5) {
-            return 10; // high risk
-        } else if (count >= 3) {
-            return 5; // medium risk
+        if (tx.getUser() == null) {
+            return new RuleResult("VELOCITY_RULE", 0, "No user", "VELOCITY");
         }
 
-        return 0;
+        LocalDateTime window = LocalDateTime.now().minusMinutes(1);
+
+        int count = repo.findByUserIdAndCreatedAtAfter(
+                tx.getUser().getId(),
+                window
+        ).size();
+
+        if (count >= 5) {
+            return new RuleResult("VELOCITY_RULE", 10, "High transaction velocity", "VELOCITY");
+        }
+
+        if (count >= 3) {
+            return new RuleResult("VELOCITY_RULE", 5, "Medium velocity", "VELOCITY");
+        }
+
+        return new RuleResult("VELOCITY_RULE", 0, "OK", "VELOCITY");
     }
 }
